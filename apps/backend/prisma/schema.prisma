@@ -1,0 +1,39 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id            String       @id @default(uuid())
+  githubId      String       @unique
+  username      String
+  email         String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  wallet        Wallet?
+  credentials   Credential[]
+}
+
+model Wallet {
+  id               String   @id @default(uuid())
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id])
+  did              String   @unique // e.g., did:key:z6Mk...
+  gpgPublicKey     String   @db.Text
+  encryptedVcStore String?  @db.Text // Encrypted Verifiable Credentials
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model Credential {
+  id               String   @id @default(uuid())
+  userId           String
+  user             User     @relation(fields: [userId], references: [id])
+  vcHash           String   @unique
+  hederaTxId       String?  // Anchored transaction ID
+  isRevoked        Boolean  @default(false) // Added feature: Revocation status
+  issuedAt         DateTime @default(now())
+}

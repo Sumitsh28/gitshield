@@ -1,0 +1,13 @@
+{
+  "name": "gitshield",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev --workspace=apps/web",
+    "dev:api": "npm run dev --workspace=apps/backend",
+    "dev": "npm run dev:web & npm run dev:api"
+  }
+}
