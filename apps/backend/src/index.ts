@@ -149,12 +149,12 @@ app.get("/api/hedera/setup", async (req, res) => {
   }
 });
 
-app.get("/api/wallet/:githubId", async (req, res) => {
-  const { githubId } = req.params;
+app.get("/api/wallet/:email", async (req, res) => {
+  const { email } = req.params;
 
   try {
-    const user = await prisma.user.findUnique({
-      where: { githubId },
+    const user = await prisma.user.findFirst({
+      where: { email },
       include: {
         wallet: true,
         credentials: true,
@@ -167,20 +167,86 @@ app.get("/api/wallet/:githubId", async (req, res) => {
         .json({ error: "No wallet found. Please verify your GPG key first." });
     }
 
-    const decryptedVc = decryptVC(user.wallet.encryptedVcStore);
+    const decryptedVcJwt = decryptVC(user.wallet.encryptedVcStore);
+
+    const jwtPayloadBase64 = decryptedVcJwt.split(".")[1];
+    const decodedVc = JSON.parse(
+      Buffer.from(jwtPayloadBase64, "base64").toString("utf-8"),
+    );
 
     const latestCredential = user.credentials[user.credentials.length - 1];
 
     res.status(200).json({
       did: user.wallet.did,
       gpgPublicKey: user.wallet.gpgPublicKey,
-      vc: JSON.parse(decryptedVc),
+      vc: decodedVc,
       vcHash: latestCredential?.vcHash || null,
       topicId: process.env.HEDERA_TOPIC_ID,
     });
   } catch (error) {
     console.error("Wallet fetch error:", error);
     res.status(500).json({ error: "Failed to fetch wallet data" });
+  }
+});
+
+app.get("/api/trust/:githubId/:gpgKeyId", async (req, res) => {
+  const { githubId, gpgKeyId } = req.params;
+
+  try {
+    const user = await prisma.user.findUnique({
+      where: { githubId },
+      include: {
+        wallet: true,
+        credentials: true,
+      },
+    });
+
+    if (!user || !user.wallet) {
+      return res.status(404).json({
+        trusted: false,
+        reason: "User not found or has not verified an identity via GitShield.",
+      });
+    }
+
+    const storedKey = await openpgp.readKey({
+      armoredKey: user.wallet.gpgPublicKey,
+    });
+    const storedKeyId = storedKey.getKeyID().toHex().toLowerCase();
+
+    if (!storedKeyId.endsWith(gpgKeyId.toLowerCase())) {
+      return res.status(403).json({
+        trusted: false,
+        reason:
+          "Key mismatch. This user has not verified this specific GPG key.",
+      });
+    }
+
+    const activeCredential = user.credentials[user.credentials.length - 1];
+
+    if (!activeCredential || activeCredential.isRevoked) {
+      return res.status(403).json({
+        trusted: false,
+        reason: "Identity credential has been revoked or is missing.",
+      });
+    }
+
+    res.status(200).json({
+      trusted: true,
+      identity: {
+        githubId: user.githubId,
+        username: user.username,
+        did: user.wallet.did,
+      },
+      proof: {
+        vcHash: activeCredential.vcHash,
+        hederaTopicId: process.env.HEDERA_TOPIC_ID,
+        explorerUrl: `https://hashscan.io/testnet/topic/${process.env.HEDERA_TOPIC_ID}`,
+      },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Trust API error:", error);
+    res.status(500).json({ trusted: false, reason: "Internal server error." });
   }
 });
 

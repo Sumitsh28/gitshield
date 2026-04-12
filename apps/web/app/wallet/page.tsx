@@ -12,7 +12,7 @@ export default function WalletDashboard() {
 
   useEffect(() => {
     if (status === "authenticated" && session?.user?.name) {
-      fetch(`http://localhost:3001/api/wallet/${session.user.name}`)
+      fetch(`http://localhost:3001/api/wallet/${session.user.email}`)
         .then((res) => res.json())
         .then((data) => {
           if (data.error) throw new Error(data.error);
