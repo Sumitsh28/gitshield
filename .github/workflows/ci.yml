@@ -1,0 +1,40 @@
+name: GitShield CI
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+
+jobs:
+  build-and-test:
+    name: Build & Verify Codebase
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 🛑 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: 📦 Install Dependencies
+
+        run: npm install
+
+      - name: 🗄️ Generate Prisma Client
+        run: npx prisma generate
+        working-directory: ./apps/backend
+
+      - name: 🏗️ Build Backend
+        run: npm run build
+        working-directory: ./apps/backend
+
+      - name: 🌐 Build Next.js Frontend
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:3001
+        run: npm run build
+        working-directory: ./apps/web
