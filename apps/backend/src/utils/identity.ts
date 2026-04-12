@@ -57,3 +57,20 @@ export function encryptVC(vcJwt: string): string {
 
   return `${iv.toString("hex")}:${encrypted}`;
 }
+
+export function decryptVC(encryptedStore: string): string {
+  const ENCRYPTION_KEY = crypto.scryptSync(
+    "gitshield-super-secret-password",
+    "salt",
+    32,
+  );
+
+  const [ivHex, encryptedHex] = encryptedStore.split(":");
+  const iv = Buffer.from(ivHex, "hex");
+  const decipher = crypto.createDecipheriv("aes-256-cbc", ENCRYPTION_KEY, iv);
+
+  let decrypted = decipher.update(encryptedHex, "hex", "utf8");
+  decrypted += decipher.final("utf8");
+
+  return decrypted;
+}

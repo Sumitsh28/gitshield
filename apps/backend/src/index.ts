@@ -5,6 +5,13 @@ import crypto from "crypto";
 import * as openpgp from "openpgp";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
+import {
+  generateContributorDid,
+  issueCredential,
+  encryptVC,
+  decryptVC,
+} from "./utils/identity";
+import { createTopic, submitMessageToTopic } from "./utils/hedera";
 
 dotenv.config();
 
@@ -72,28 +79,108 @@ app.post("/api/gpg/verify", async (req, res) => {
       });
     }
 
+    const contributorDid = generateContributorDid();
+
+    const gpgKeyId = publicKey.getKeyID().toHex();
+
+    const vcJwt = await issueCredential(contributorDid, githubId, gpgKeyId);
+
+    const encryptedVc = encryptVC(vcJwt);
+
+    const vcHash = crypto.createHash("sha256").update(vcJwt).digest("hex");
+
+    const topicId = process.env.HEDERA_TOPIC_ID;
+    if (!topicId) throw new Error("HEDERA_TOPIC_ID is missing in .env");
+
+    const hederaTxId = await submitMessageToTopic(topicId, vcHash);
+    console.log(`✅ Successfully anchored to Hedera! Tx ID: ${hederaTxId}`);
+
     const user = await prisma.user.upsert({
       where: { githubId },
       update: { username, email },
       create: { githubId, username, email },
     });
 
-    const tempDid = `did:key:temp_${crypto.randomBytes(8).toString("hex")}`;
-
     await prisma.wallet.upsert({
       where: { userId: user.id },
-      update: { gpgPublicKey: record.gpgKey },
-      create: { userId: user.id, gpgPublicKey: record.gpgKey, did: tempDid },
+      update: {
+        gpgPublicKey: record.gpgKey,
+        did: contributorDid,
+        encryptedVcStore: encryptedVc,
+      },
+      create: {
+        userId: user.id,
+        gpgPublicKey: record.gpgKey,
+        did: contributorDid,
+        encryptedVcStore: encryptedVc,
+      },
+    });
+
+    await prisma.credential.upsert({
+      where: { vcHash },
+      update: { isRevoked: false },
+      create: { userId: user.id, vcHash },
     });
 
     challengeStore.delete(githubId);
 
-    res
-      .status(200)
-      .json({ message: "Identity cryptographically verified and saved!" });
+    res.status(200).json({
+      message:
+        "Identity cryptographically verified, VC issued, and anchored to Hedera!",
+      did: contributorDid,
+      hederaTxId: hederaTxId,
+    });
   } catch (error) {
     console.error("Verification error:", error);
     res.status(400).json({ error: "Invalid signature or mismatched key." });
+  }
+});
+
+app.get("/api/hedera/setup", async (req, res) => {
+  try {
+    const topicId = await createTopic();
+    res.status(200).json({
+      message: "Hedera Topic Created Successfully!",
+      topicId: topicId,
+    });
+  } catch (error) {
+    console.error("Hedera Setup Error:", error);
+    res.status(500).json({ error: "Failed to create topic" });
+  }
+});
+
+app.get("/api/wallet/:githubId", async (req, res) => {
+  const { githubId } = req.params;
+
+  try {
+    const user = await prisma.user.findUnique({
+      where: { githubId },
+      include: {
+        wallet: true,
+        credentials: true,
+      },
+    });
+
+    if (!user || !user.wallet || !user.wallet.encryptedVcStore) {
+      return res
+        .status(404)
+        .json({ error: "No wallet found. Please verify your GPG key first." });
+    }
+
+    const decryptedVc = decryptVC(user.wallet.encryptedVcStore);
+
+    const latestCredential = user.credentials[user.credentials.length - 1];
+
+    res.status(200).json({
+      did: user.wallet.did,
+      gpgPublicKey: user.wallet.gpgPublicKey,
+      vc: JSON.parse(decryptedVc),
+      vcHash: latestCredential?.vcHash || null,
+      topicId: process.env.HEDERA_TOPIC_ID,
+    });
+  } catch (error) {
+    console.error("Wallet fetch error:", error);
+    res.status(500).json({ error: "Failed to fetch wallet data" });
   }
 });
 

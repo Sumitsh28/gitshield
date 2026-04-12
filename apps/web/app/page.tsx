@@ -61,7 +61,10 @@ export default function Home() {
       const data = await res.json();
 
       if (res.ok) {
-        setStatus({ type: "success", message: "✅ " + data.message });
+        setStatus({
+          type: "success",
+          message: `✅ ${data.message} DID: ${data.did} | Hedera Tx: ${data.hederaTxId}`,
+        });
         setNonce("");
       } else {
         setStatus({ type: "error", message: "❌ " + data.error });
