@@ -182,6 +182,7 @@ app.get("/api/wallet/:email", async (req, res) => {
       vc: decodedVc,
       vcHash: latestCredential?.vcHash || null,
       topicId: process.env.HEDERA_TOPIC_ID,
+      isRevoked: latestCredential?.isRevoked || false,
     });
   } catch (error) {
     console.error("Wallet fetch error:", error);
@@ -247,6 +248,46 @@ app.get("/api/trust/:githubId/:gpgKeyId", async (req, res) => {
   } catch (error) {
     console.error("Trust API error:", error);
     res.status(500).json({ trusted: false, reason: "Internal server error." });
+  }
+});
+
+app.post("/api/wallet/revoke", async (req, res) => {
+  const { email } = req.body;
+
+  try {
+    const user = await prisma.user.findFirst({
+      where: { email },
+      include: { credentials: true },
+    });
+
+    if (!user || user.credentials.length === 0) {
+      return res.status(404).json({ error: "No active credentials found." });
+    }
+
+    const activeCredential = user.credentials[user.credentials.length - 1];
+
+    if (activeCredential.isRevoked) {
+      return res.status(400).json({ error: "Credential is already revoked." });
+    }
+
+    await prisma.credential.update({
+      where: { id: activeCredential.id },
+      data: { isRevoked: true },
+    });
+
+    const topicId = process.env.HEDERA_TOPIC_ID;
+    if (!topicId) throw new Error("HEDERA_TOPIC_ID missing");
+
+    const burnMessage = `REVOKED::${activeCredential.vcHash}`;
+    const hederaTxId = await submitMessageToTopic(topicId, burnMessage);
+
+    res.status(200).json({
+      message: "Identity permanently revoked.",
+      hederaTxId,
+    });
+  } catch (error) {
+    console.error("Revocation error:", error);
+    res.status(500).json({ error: "Failed to revoke credential." });
   }
 });
 
