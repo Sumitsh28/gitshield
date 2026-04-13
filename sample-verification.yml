@@ -1,0 +1,44 @@
+name: GitShield Identity Verification
+
+on:
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  verify-contributor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Extract Commit Data
+        id: extract
+        run: |
+          # 1. Get the GitHub ID of the person who opened the PR
+          PR_AUTHOR_ID=${{ github.event.pull_request.user.id }}
+
+          # 2. Extract the GPG Key ID used to sign the latest commit
+          GPG_KEY_ID=$(git log -1 --show-signature | grep "using RSA key" | awk '{print $NF}')
+
+          echo "github_id=$PR_AUTHOR_ID" >> $GITHUB_ENV
+          echo "gpg_key=$GPG_KEY_ID" >> $GITHUB_ENV
+
+      - name: Ping GitShield API
+        run: |
+          # 3. Hit YOUR live API to check if this key is trusted and not revoked
+          RESPONSE=$(curl -s "https://expected-joint-way-playstation.trycloudflare.com/api/trust/${{ env.github_id }}/${{ env.gpg_key }}")
+
+          # 4. Use 'jq' to parse the JSON response and check the "trusted" boolean
+          IS_TRUSTED=$(echo $RESPONSE | jq -r '.trusted')
+
+          # 5. Make the final decision
+          if [ "$IS_TRUSTED" == "true" ]; then
+            echo "✅ Identity Verified via GitShield! Credential anchored on Hedera."
+            exit 0 # This tells GitHub Actions to PASS the check
+          else
+            echo "❌ CRITICAL SECURITY ALERT: GitShield reports this identity is unverified or the key has been revoked!"
+            echo "API Response: $RESPONSE"
+            exit 1 # This tells GitHub Actions to FAIL and block the merge
+          fi
